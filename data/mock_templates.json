@@ -1,0 +1,4 @@
+{
+    "categories": ["учёба", "быт", "здоровье", "отдых", "другое"],
+    "importance_levels": ["low", "medium", "high"]
+}

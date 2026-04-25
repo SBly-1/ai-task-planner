@@ -60,10 +60,26 @@ def _reminder_text() -> str:
     if not tired_tasks:
         return ""
 
-    lines = ["\n\n⚠️ Напоминание: эти задачи уже откладывались много раз, лучше закрыть их поскорее:"]
+    lines = ["\n\nНапоминание: эти задачи уже откладывались много раз, лучше закрыть их поскорее:"]
     for task in tired_tasks[:3]:
-        lines.append(f"• {task.get('title', 'Задача')} — переносов: {task.get('postponed_count', 0)}")
+        lines.append(f"- {task.get('title', 'Задача')} — переносов: {task.get('postponed_count', 0)}")
     return "\n".join(lines)
+
+
+def _creation_actions(result: dict) -> list[cl.Action]:
+    if result.get("current_step") == "ask_missing_info":
+        missing_fields = result.get("missing_fields", [])
+        if missing_fields and missing_fields[0] == "title":
+            return []
+        return get_new_task_actions(missing_fields[:1])
+    return get_main_actions()
+
+
+def _finish_creation_if_saved(result: dict) -> dict:
+    if result.get("current_step") == "task_saved":
+        result["mode"] = None
+        result["selected_task_id"] = None
+    return result
 
 
 def _run_graph_with_state(state: dict, parsed: dict, user_message: str) -> dict:
@@ -77,7 +93,7 @@ def _run_graph_with_state(state: dict, parsed: dict, user_message: str) -> dict:
     result.setdefault("messages", []).append(
         {"role": "assistant", "content": result.get("bot_response", "")}
     )
-    return result
+    return _finish_creation_if_saved(result)
 
 
 async def _send_plan() -> None:
@@ -89,14 +105,20 @@ async def _send_plan() -> None:
     ).send()
 
 
+async def _send_delete_picker() -> None:
+    tasks = load_tasks()
+    await cl.Message(
+        content=format_tasks_for_action(tasks, "Выберите задачу для удаления"),
+        actions=get_task_list_actions(tasks, "delete_task") if tasks else get_main_actions(),
+    ).send()
+
+
 async def handle_start():
     state = get_initial_state()
-
     cl.user_session.set("state", state)
 
     result = graph.invoke(state)
     result["bot_response"] = (result.get("bot_response") or "") + _reminder_text()
-
     cl.user_session.set("state", result)
 
     await cl.Message(
@@ -123,14 +145,14 @@ async def handle_message(msg: cl.Message):
 
         task = next((item for item in load_tasks() if item.get("id") == task_id), {})
         count = task.get("postponed_count", 0) + 1
-        update_task(task_id, {"deadline": deadline, "status": "postponed", "postponed_count": count})
+        update_task(task_id, {"deadline": deadline, "status": "active", "postponed_count": count})
         state["mode"] = None
         state["selected_task_id"] = None
         cl.user_session.set("state", state)
 
-        warning = "\n\n⚠️ Эта задача уже часто переносилась. Стоит запланировать её первой." if count >= 5 else ""
+        warning = "\n\nЭта задача уже часто переносилась. Стоит запланировать её первой." if count >= 5 else ""
         await cl.Message(
-            content=f"📅 Перенёс задачу на {deadline}. Количество переносов: {count}.{warning}",
+            content=f"Перенёс задачу на {deadline}. Количество переносов: {count}.{warning}",
             actions=get_main_actions(),
         ).send()
         return
@@ -143,10 +165,9 @@ async def handle_message(msg: cl.Message):
         await _send_plan()
         return
 
-    actions = get_new_task_actions() if result.get("current_step") == "ask_missing_info" else get_main_actions()
     await cl.Message(
         content=result.get("bot_response", ""),
-        actions=actions,
+        actions=_creation_actions(result),
     ).send()
 
 
@@ -182,21 +203,24 @@ async def handle_action(action: cl.Action):
         state["task_data"] = {}
         cl.user_session.set("state", state)
         await cl.Message(
-            content="Опишите новую задачу обычным текстом. Например: `решение задач по математике на 31 минуту до завтра`.",
-            actions=get_new_task_actions(),
+            content="Что нужно сделать? Напишите название задачи обычным текстом.",
+            actions=[],
         ).send()
         return
 
-    if action_type in {"hint_category", "hint_importance", "hint_deadline"}:
+    if action_type in {"hint_category", "hint_importance", "hint_deadline", "hint_duration"}:
         task_data = {
             key: payload[key]
-            for key in ("category", "importance", "deadline")
+            for key in ("category", "importance", "deadline", "duration_minutes")
             if key in payload
         }
         parsed = {"intent": "add_task", "task_data": task_data}
         result = _run_graph_with_state(state, parsed, f"[подсказка: {action_type}]")
         cl.user_session.set("state", result)
-        await cl.Message(content=result.get("bot_response", ""), actions=get_new_task_actions()).send()
+        await cl.Message(
+            content=result.get("bot_response", ""),
+            actions=_creation_actions(result),
+        ).send()
         return
 
     if action_type == "show_plan":
@@ -216,11 +240,7 @@ async def handle_action(action: cl.Action):
         return
 
     if action_type == "delete_menu":
-        tasks = load_tasks()
-        await cl.Message(
-            content=format_tasks_for_action(tasks, "Выберите задачу для удаления"),
-            actions=get_task_list_actions(tasks, "delete_task") if tasks else get_main_actions(),
-        ).send()
+        await _send_delete_picker()
         return
 
     if action_type == "postpone_menu":
@@ -241,17 +261,17 @@ async def handle_action(action: cl.Action):
 
     if action_type == "complete_task" and task_id:
         update_task(task_id, {"status": "completed"})
-        await cl.Message(content="✅ Задача отмечена выполненной.", actions=get_main_actions()).send()
+        await cl.Message(content="Задача отмечена выполненной.", actions=get_main_actions()).send()
         return
 
     if action_type == "restore_task" and task_id:
         update_task(task_id, {"status": "active"})
-        await cl.Message(content="↩️ Вернул задачу в активный план.", actions=get_main_actions()).send()
+        await cl.Message(content="Вернул задачу в активный план.", actions=get_main_actions()).send()
         return
 
     if action_type == "delete_task" and task_id:
         deleted = delete_task(task_id)
-        text = "🗑 Задача удалена." if deleted else "Не нашёл задачу для удаления."
+        text = "Задача удалена." if deleted else "Не нашёл задачу для удаления."
         await cl.Message(content=text, actions=get_main_actions()).send()
         return
 
@@ -269,16 +289,16 @@ async def handle_action(action: cl.Action):
         task = next((item for item in load_tasks() if item.get("id") == task_id), {})
         count = task.get("postponed_count", 0) + 1
         deadline = payload.get("deadline")
-        updates = {"status": "postponed", "postponed_count": count}
+        updates = {"status": "active", "postponed_count": count}
         if deadline:
             updates["deadline"] = deadline
         update_task(task_id, updates)
         state["mode"] = None
         state["selected_task_id"] = None
         cl.user_session.set("state", state)
-        warning = "\n\n⚠️ Эта задача уже часто переносилась. Стоит выполнить её поскорее." if count >= 5 else ""
+        warning = "\n\nЭта задача уже часто переносилась. Стоит выполнить её поскорее." if count >= 5 else ""
         await cl.Message(
-            content=f"📅 Задача перенесена. Количество переносов: {count}.{warning}",
+            content=f"Задача перенесена. Количество переносов: {count}.{warning}",
             actions=get_main_actions(),
         ).send()
         return

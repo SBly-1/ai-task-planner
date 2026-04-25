@@ -201,7 +201,7 @@ def handle_action_node(state: AgentState) -> dict:
         updated = update_task(
             task_id,
             {
-                "status": "postponed",
+                "status": "active",
                 "postponed_count": current_count + 1,
             },
         )

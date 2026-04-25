@@ -1,6 +1,6 @@
-import json
+﻿import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from graph.state import AgentState, TaskData
 
@@ -41,12 +41,12 @@ def write_json(path: str | Path, data: Any) -> None:
     )
 
 
-def load_tasks() -> list[TaskData]:
+def load_tasks() -> List[TaskData]:
     ensure_data_dirs()
     return read_json(TASKS_FILE, default=[])
 
 
-def save_tasks(tasks: list[TaskData]) -> None:
+def save_tasks(tasks: List[TaskData]) -> None:
     ensure_data_dirs()
     write_json(TASKS_FILE, tasks)
 
@@ -57,7 +57,7 @@ def append_task(task: TaskData) -> None:
     save_tasks(tasks)
 
 
-def update_task(task_id: str, updates: dict) -> bool:
+def update_task(task_id: str, updates: Dict) -> bool:
     tasks = load_tasks()
 
     for task in tasks:

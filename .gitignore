@@ -215,3 +215,7 @@ data/sessions/*.json
 # OS / editor
 .DS_Store
 *.swp
+
+data/tasks.json
+data/sessions/*.json
+.env

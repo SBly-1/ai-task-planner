@@ -1,4 +1,4 @@
-from typing import List, Optional, TypedDict
+﻿from typing import List, Optional, TypedDict
 
 
 class TaskData(TypedDict, total=False):
@@ -22,6 +22,7 @@ class AgentState(TypedDict, total=False):
     action: Optional[str]
 
     task_data: Optional[TaskData]
+    draft_task: Optional[TaskData]
     tasks: List[TaskData]
 
     missing_fields: List[str]

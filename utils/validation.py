@@ -68,21 +68,9 @@ def validate_category(category: Optional[str]) -> list[str]:
 
 def get_missing_fields(task: Optional[TaskData]) -> list[str]:
     if task is None:
-        return [
-            "title",
-            "deadline",
-            "duration_minutes",
-            "importance",
-            "category",
-        ]
+        return ["title", "deadline", "duration_minutes", "importance", "category"]
 
-    required_fields = [
-        "title",
-        "deadline",
-        "duration_minutes",
-        "importance",
-        "category",
-    ]
+    required_fields = ["title", "deadline", "duration_minutes", "importance", "category"]
 
     return [
         field
@@ -92,10 +80,10 @@ def get_missing_fields(task: Optional[TaskData]) -> list[str]:
 
 
 def validate_task(task: Optional[TaskData]) -> list[str]:
-    errors = []
-
     if task is None:
         return ["Задача не заполнена."]
+
+    errors = []
 
     if not task.get("title"):
         errors.append("Не указано название задачи.")
@@ -105,4 +93,4 @@ def validate_task(task: Optional[TaskData]) -> list[str]:
     errors.extend(validate_importance(task.get("importance")))
     errors.extend(validate_category(task.get("category")))
 
-    return errors 
+    return errors

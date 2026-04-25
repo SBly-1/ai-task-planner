@@ -3,7 +3,7 @@
 from graph.builder import build_graph
 from llm.client import parse_user_message
 from ui.components import get_main_actions
-from ui.formatters import format_plan
+from ui.formatters import format_plan_by_day
 from utils.storage import load_tasks
 
 
@@ -75,40 +75,38 @@ async def handle_message(msg: cl.Message):
     ).send()
 
 
+@cl.action_callback("main_cmd")
 async def handle_action(action: cl.Action):
-    state = cl.user_session.get("state") or get_initial_state()
-
+    """Обработка кнопок главного меню"""
+    state = cl.user_session.get("state")
+    
+    # Извлекаем данные из payload
     intent = action.payload.get("intent", "unknown")
+    action_type = action.payload.get("action")  # complete_task / postpone_task / show_plan
     task_id = action.payload.get("task_id")
-
+    
+    # Обновляем состояние
     state["intent"] = intent
-    state["action"] = intent
-    state["user_message"] = ""
-
+    state["action"] = action_type
+    state["messages"].append({"role": "user", "content": f"[КНОПКА: {intent}]"})
+    
     if task_id:
-        state["task_data"] = {"id": task_id}
+        state["task_data"]["id"] = task_id
+    
+    # Запускаем граф
+    res = graph.invoke(state)
+    cl.user_session.set("state", res)
+    
+    # Показываем результат
+    if intent == "show_plan":
+        # ✅ Ключевой момент: используем format_plan_by_day вместо format_plan
+        from ui.formatters import format_plan_by_day
+        await cl.Message(
+            content=format_plan_by_day(res.get("tasks", [])),
+            actions=get_main_actions()
+        ).send()
     else:
-        state["task_data"] = {}
-
-    state.setdefault("messages", []).append({"role": "user", "content": f"[КНОПКА: {intent}]"})
-
-    result = graph.invoke(state)
-
-    result.setdefault("messages", []).append(
-        {
-            "role": "assistant",
-            "content": result.get("bot_response", ""),
-        }
-    )
-
-    cl.user_session.set("state", result)
-
-    if result.get("current_step") == "plan_ready":
-        content = format_plan(result.get("tasks", []))
-    else:
-        content = result.get("bot_response", "✅")
-
-    await cl.Message(
-        content=content,
-        actions=get_main_actions(),
-    ).send()
+        await cl.Message(
+            content=res.get("bot_response", "✅"),
+            actions=get_main_actions()
+        ).send()

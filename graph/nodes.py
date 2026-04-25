@@ -152,23 +152,13 @@ def save_task_node(state: AgentState) -> dict:
 
 
 def build_plan_node(state: AgentState) -> dict:
+    """Строит отсортированный план"""
+    from utils.storage import load_tasks
+    from core.scheduler import build_plan
+    
     tasks = load_tasks()
-    plan = build_plan(tasks)
-
-    if not plan:
-        return {
-            "tasks": [],
-            "bot_response": "📋 Пока активных задач нет. Напишите задачу, и я помогу её запланировать.",
-            "current_step": "plan_empty",
-            "is_complete": True,
-        }
-
-    return {
-        "tasks": plan,
-        "bot_response": "📋 План готов.",
-        "current_step": "plan_ready",
-        "is_complete": True,
-    }
+    plan = build_plan(tasks)  # сортировка по приоритету
+    return {"tasks": plan}  # ✅ Важно: вернуть задачи в state
 
 
 def handle_action_node(state: AgentState) -> dict:

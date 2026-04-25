@@ -1,55 +1,23 @@
-# ui/handlers.py
-import chainlit as cl  # ✅ КРИТИЧНО: этот импорт должен быть первым!
-import json
+﻿import chainlit as cl
+
 from graph.builder import build_graph
-from llm.client import get_llm
-from llm.prompts import INTENT_SYSTEM
+from llm.client import parse_user_message
 from ui.components import get_main_actions
 from ui.formatters import format_plan
 from utils.storage import load_tasks
 
-# Инициализация (выполняется один раз при старте сервера)
+
 graph = build_graph()
-llm = get_llm()
 
-def parse_intent(text: str) -> dict:
-    """Определяет намерение пользователя (простая эвристика + LLM fallback)"""
-    text_lower = text.lower()
-    
-    # Простые ключевые слова для скорости
-    if "план" in text_lower or "show" in text_lower or "список" in text_lower:
-        return {"intent": "show_plan", "task_data": {}}
-    elif "выполн" in text_lower or "done" in text_lower or "готов" in text_lower:
-        return {"intent": "complete_task", "task_data": {}}
-    elif "перенес" in text_lower or "postpone" in text_lower or "отлож" in text_lower:
-        return {"intent": "postpone_task", "task_data": {}}
-    elif "помо" in text_lower or "help" in text_lower or "подсказ" in text_lower:
-        return {"intent": "help", "task_data": {}}
-    
-    # Для добавления задачи — пытаемся распарсить строку
-    parts = [p.strip() for p in text.split(",")]
-    if len(parts) >= 2:  # Минимум "название, дата"
-        task_data = {
-            "title": parts[0],
-            "deadline": parts[1] if len(parts) > 1 else "",
-            "duration_minutes": int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 60,
-            "importance": parts[3].lower().strip() if len(parts) > 3 else "medium",
-            "category": parts[4].lower().strip() if len(parts) > 4 else "other"
-        }
-        return {"intent": "add_task", "task_data": task_data}
-    
-    # Fallback: если не распарсили — считаем, что это help
-    return {"intent": "help", "task_data": {}}
 
-@cl.on_chat_start
-async def handle_start():
-    """Инициализация чата"""
-    state = {
+def get_initial_state() -> dict:
+    return {
         "messages": [],
         "user_message": "",
-        "intent": "add_task",      # стартовое намерение
+        "intent": "help",
         "current_step": "greet",
         "task_data": {},
+        "draft_task": {},
         "tasks": load_tasks(),
         "missing_fields": [],
         "errors": [],
@@ -57,77 +25,90 @@ async def handle_start():
         "bot_response": None,
         "action": None,
     }
+
+
+async def handle_start():
+    state = get_initial_state()
+
     cl.user_session.set("state", state)
-    
-    # Запускаем граф
-    res = graph.invoke(state)
-    cl.user_session.set("state", res)
-    
-    # Показываем ответ
+
+    result = graph.invoke(state)
+
+    cl.user_session.set("state", result)
+
     await cl.Message(
-        content=res.get("bot_response", "👋 Привет!"),
-        actions=get_main_actions()
+        content=result.get("bot_response", "Добрый день! Хотите добавить задачу?"),
+        actions=get_main_actions(),
     ).send()
 
-@cl.on_message
+
 async def handle_message(msg: cl.Message):
-    """Обработка сообщения от пользователя"""
-    state = cl.user_session.get("state")
-    
-    # Определяем намерение
-    parsed = parse_intent(msg.content)
-    
-    # Обновляем состояние
+    state = cl.user_session.get("state") or get_initial_state()
+
+    parsed = parse_user_message(msg.content, state)
+
     state["user_message"] = msg.content
-    state["intent"] = parsed.get("intent", "unknown")
+    state["intent"] = parsed.get("intent", "add_task")
     state["task_data"] = parsed.get("task_data", {})
     state["action"] = None
-    state["messages"].append({"role": "user", "content": msg.content})
-    
-    # Запускаем граф
-    res = graph.invoke(state)
-    cl.user_session.set("state", res)
-    
-    # Показываем ответ
-    if state["intent"] == "show_plan":
-        await cl.Message(
-            content=format_plan(res.get("tasks", [])),
-            actions=get_main_actions()
-        ).send()
-    else:
-        await cl.Message(
-            content=res.get("bot_response", "🤔"),
-            actions=get_main_actions()
-        ).send()
+    state.setdefault("messages", []).append({"role": "user", "content": msg.content})
 
-@cl.action_callback("main_cmd")
+    result = graph.invoke(state)
+
+    result.setdefault("messages", []).append(
+        {
+            "role": "assistant",
+            "content": result.get("bot_response", ""),
+        }
+    )
+
+    cl.user_session.set("state", result)
+
+    if result.get("current_step") == "plan_ready":
+        content = format_plan(result.get("tasks", []))
+    else:
+        content = result.get("bot_response", "")
+
+    await cl.Message(
+        content=content,
+        actions=get_main_actions(),
+    ).send()
+
+
 async def handle_action(action: cl.Action):
-    """Обработка кнопок"""
-    state = cl.user_session.get("state")
-    
-    # Извлекаем данные из payload кнопки
+    state = cl.user_session.get("state") or get_initial_state()
+
     intent = action.payload.get("intent", "unknown")
     task_id = action.payload.get("task_id")
-    
-    # Обновляем состояние
+
     state["intent"] = intent
-    state["action"] = intent  # для handle_action_node
+    state["action"] = intent
+    state["user_message"] = ""
+
     if task_id:
-        state["task_data"]["id"] = task_id
-    state["messages"].append({"role": "user", "content": f"[КНОПКА: {intent}]"})
-    
-    # Запускаем граф
-    res = graph.invoke(state)
-    cl.user_session.set("state", res)
-    
-    # Показываем ответ
-    if intent == "show_plan":
-        await cl.Message(
-            content=format_plan(res.get("tasks", [])),
-            actions=get_main_actions()
-        ).send()
+        state["task_data"] = {"id": task_id}
     else:
-        await cl.Message(
-            content=res.get("bot_response", "✅"),
-            actions=get_main_actions()
-        ).send()
+        state["task_data"] = {}
+
+    state.setdefault("messages", []).append({"role": "user", "content": f"[КНОПКА: {intent}]"})
+
+    result = graph.invoke(state)
+
+    result.setdefault("messages", []).append(
+        {
+            "role": "assistant",
+            "content": result.get("bot_response", ""),
+        }
+    )
+
+    cl.user_session.set("state", result)
+
+    if result.get("current_step") == "plan_ready":
+        content = format_plan(result.get("tasks", []))
+    else:
+        content = result.get("bot_response", "✅")
+
+    await cl.Message(
+        content=content,
+        actions=get_main_actions(),
+    ).send()

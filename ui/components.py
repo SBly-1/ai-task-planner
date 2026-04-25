@@ -12,13 +12,12 @@ def _action(label: str, intent: str, action: str, **payload) -> cl.Action:
 
 
 def get_main_actions() -> list[cl.Action]:
-    """Кнопки главного меню."""
     return [
-        _action("📋 Мой план", "show_plan", "show_plan"),
-        _action("💡 Подсказка", "help", "help"),
-        _action("⚙️ Действия", "actions_menu", "actions_menu"),
-        _action("➕ Новая задача", "new_task", "new_task"),
-        _action("🗄 Архив", "archive", "archive"),
+        _action("Мой план", "show_plan", "show_plan"),
+        _action("Подсказка", "help", "help"),
+        _action("Действия", "actions_menu", "actions_menu"),
+        _action("Новая задача", "new_task", "new_task"),
+        _action("Архив", "archive", "archive"),
     ]
 
 
@@ -26,15 +25,51 @@ def get_cancel_actions() -> list[cl.Action]:
     return [_action("Отмена", "cancel", "cancel")]
 
 
-def get_new_task_actions() -> list[cl.Action]:
-    return [
-        _action("Учёба", "add_task", "hint_category", category="study"),
-        _action("Обычно", "add_task", "hint_importance", importance="normal"),
-        _action("Срочно", "add_task", "hint_importance", importance="high"),
-        _action("Сегодня", "add_task", "hint_deadline", deadline=datetime.now().date().isoformat()),
-        _action("Завтра", "add_task", "hint_deadline", deadline=(datetime.now().date() + timedelta(days=1)).isoformat()),
-        *get_cancel_actions(),
-    ]
+def get_new_task_actions(missing_fields: list[str] | None = None) -> list[cl.Action]:
+    missing = set(missing_fields or [])
+
+    if "title" in missing:
+        return []
+
+    actions: list[cl.Action] = []
+
+    if not missing or "duration_minutes" in missing:
+        actions.extend(
+            [
+                _action("31 минута", "add_task", "hint_duration", duration_minutes=31),
+                _action("2 часа", "add_task", "hint_duration", duration_minutes=120),
+                _action("2 дня", "add_task", "hint_duration", duration_minutes=2880),
+            ]
+        )
+
+    if not missing or "deadline" in missing:
+        actions.extend(
+            [
+                _action("Сегодня", "add_task", "hint_deadline", deadline=datetime.now().date().isoformat()),
+                _action("Завтра", "add_task", "hint_deadline", deadline=(datetime.now().date() + timedelta(days=1)).isoformat()),
+            ]
+        )
+
+    if not missing or "importance" in missing:
+        actions.extend(
+            [
+                _action("Обычно", "add_task", "hint_importance", importance="normal"),
+                _action("Срочно", "add_task", "hint_importance", importance="high"),
+            ]
+        )
+
+    if not missing or "category" in missing:
+        actions.extend(
+            [
+                _action("Учёба", "add_task", "hint_category", category="study"),
+                _action("Быт", "add_task", "hint_category", category="home"),
+                _action("Здоровье", "add_task", "hint_category", category="health"),
+                _action("Отдых", "add_task", "hint_category", category="rest"),
+                _action("Другое", "add_task", "hint_category", category="other"),
+            ]
+        )
+
+    return actions + get_cancel_actions()
 
 
 def get_actions_menu() -> list[cl.Action]:
@@ -48,9 +83,9 @@ def get_actions_menu() -> list[cl.Action]:
 
 def get_task_actions(task_id: str) -> list[cl.Action]:
     return [
-        _action("Выполнено", "complete_task", "complete_task", task_id=task_id),
-        _action("Перенести", "postpone_prepare", "postpone_prepare", task_id=task_id),
-        _action("Удалить", "delete_task", "delete_task", task_id=task_id),
+        _action("Выполнить задачу", "complete_menu", "complete_menu"),
+        _action("Перенести задачу", "postpone_menu", "postpone_menu"),
+        _action("Удалить задачи", "delete_menu", "delete_menu"),
         *get_cancel_actions(),
     ]
 

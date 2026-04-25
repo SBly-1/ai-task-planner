@@ -4,7 +4,7 @@ from typing import List, Dict
 
 def _priority_score(task: Dict) -> int:
     """Считает вес задачи: важность + срочность"""
-    imp_map = {"high": 30, "medium": 20, "low": 10}
+    imp_map = {"high": 30, "normal": 20, "medium": 20, "low": 10}
     imp_score = imp_map.get(task.get("importance", "low"), 10)
     
     try:

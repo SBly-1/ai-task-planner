@@ -69,6 +69,17 @@ def update_task(task_id: str, updates: Dict) -> bool:
     return False
 
 
+def delete_task(task_id: str) -> bool:
+    tasks = load_tasks()
+    kept_tasks = [task for task in tasks if task.get("id") != task_id]
+
+    if len(kept_tasks) == len(tasks):
+        return False
+
+    save_tasks(kept_tasks)
+    return True
+
+
 def load_session(user_id: str) -> AgentState:
     ensure_data_dirs()
     path = SESSIONS_DIR / f"{user_id}.json"

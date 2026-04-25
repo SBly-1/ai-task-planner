@@ -44,6 +44,7 @@ def _merge_task_data(old_task: TaskData | None, new_task: TaskData | None) -> Ta
 def _fill_defaults(task: TaskData) -> TaskData:
     if task.get("title"):
         task.setdefault("id", str(uuid.uuid4())[:8])
+        task.setdefault("importance", "normal")
         task.setdefault("status", "active")
         task.setdefault("created_at", datetime.now().isoformat(timespec="seconds"))
         task.setdefault("postponed_count", 0)
@@ -153,12 +154,14 @@ def save_task_node(state: AgentState) -> dict:
 
 def build_plan_node(state: AgentState) -> dict:
     """Строит отсортированный план"""
-    from utils.storage import load_tasks
-    from core.scheduler import build_plan
-    
     tasks = load_tasks()
     plan = build_plan(tasks)  # сортировка по приоритету
-    return {"tasks": plan}  # ✅ Важно: вернуть задачи в state
+    return {
+        "tasks": plan,
+        "bot_response": "📋 Готово, собрал план по приоритетам.",
+        "current_step": "plan_ready",
+        "is_complete": True,
+    }
 
 
 def handle_action_node(state: AgentState) -> dict:
@@ -221,6 +224,6 @@ def handle_action_node(state: AgentState) -> dict:
 def complete_node(state: AgentState) -> dict:
     return {
         "bot_response": state.get("bot_response") or "✅ Готово!",
-        "current_step": "complete",
+        "current_step": state.get("current_step") or "complete",
         "is_complete": True,
     }

@@ -20,6 +20,8 @@ class AgentState(TypedDict, total=False):
     intent: str
     current_step: str
     action: Optional[str]
+    mode: Optional[str]
+    selected_task_id: Optional[str]
 
     task_data: Optional[TaskData]
     draft_task: Optional[TaskData]

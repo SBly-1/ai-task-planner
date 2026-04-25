@@ -4,7 +4,7 @@ from typing import Optional
 from graph.state import TaskData
 
 
-VALID_IMPORTANCE = {"low", "medium", "high"}
+VALID_IMPORTANCE = {"low", "normal", "medium", "high"}
 VALID_CATEGORIES = {"study", "home", "health", "rest", "other"}
 
 
@@ -38,7 +38,7 @@ def validate_importance(importance: Optional[str]) -> list[str]:
         return []
 
     if importance not in VALID_IMPORTANCE:
-        return ["Важность должна быть: low, medium или high."]
+        return ["Важность должна быть: low, normal, medium или high."]
 
     return []
 

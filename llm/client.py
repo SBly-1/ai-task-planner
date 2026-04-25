@@ -79,7 +79,33 @@ def _normalize_deadline(raw: str) -> str | None:
         try:
             return datetime(year, month, day).date().isoformat()
         except ValueError:
-            return None
+            return ru_date_match.group(0)
+
+    month_names = {
+        "января": 1,
+        "февраля": 2,
+        "марта": 3,
+        "апреля": 4,
+        "мая": 5,
+        "июня": 6,
+        "июля": 7,
+        "августа": 8,
+        "сентября": 9,
+        "октября": 10,
+        "ноября": 11,
+        "декабря": 12,
+    }
+    month_pattern = "|".join(month_names)
+    month_match = re.search(rf"\b(\d{{1,2}})\s+({month_pattern})(?:\s+(20\d{{2}}))?\b", text)
+    if month_match:
+        day = int(month_match.group(1))
+        month = month_names[month_match.group(2)]
+        year = int(month_match.group(3)) if month_match.group(3) else today.year
+
+        try:
+            return datetime(year, month, day).date().isoformat()
+        except ValueError:
+            return month_match.group(0)
 
     return None
 
@@ -87,10 +113,14 @@ def _normalize_deadline(raw: str) -> str | None:
 def _extract_duration(raw: str) -> int | None:
     text = raw.lower()
 
+    days_match = re.search(r"(\d+)\s*(день|дня|дней|д)\b", text)
     hours_match = re.search(r"(\d+)\s*(час|часа|часов|ч)\b", text)
-    minutes_match = re.search(r"(\d+)\s*(мин|минут|минуты|м)\b", text)
+    minutes_match = re.search(r"(\d+)\s*(мин|минута|минуту|минуты|минут|м)\b", text)
 
     total = 0
+
+    if days_match:
+        total += int(days_match.group(1)) * 24 * 60
 
     if hours_match:
         total += int(hours_match.group(1)) * 60
@@ -113,7 +143,10 @@ def _extract_importance(raw: str) -> str | None:
     if any(word in text for word in ["срочно", "важно", "важная", "важный", "high"]):
         return "high"
 
-    if any(word in text for word in ["средне", "средняя", "обычно", "medium"]):
+    if any(word in text for word in ["нормально", "нормальная", "обычно", "normal"]):
+        return "normal"
+
+    if any(word in text for word in ["средне", "средняя", "medium"]):
         return "medium"
 
     if any(word in text for word in ["низкая", "низкий", "неважно", "low", "можно потом"]):
@@ -125,7 +158,27 @@ def _extract_importance(raw: str) -> str | None:
 def _extract_category(raw: str) -> str | None:
     text = raw.lower()
 
-    if any(word in text for word in ["учеб", "учёб", "лаба", "лаборатор", "дз", "экзамен", "веб", "алгебр", "study"]):
+    if any(
+        word in text
+        for word in [
+            "учеб",
+            "учёб",
+            "лаба",
+            "лаборатор",
+            "дз",
+            "экзамен",
+            "веб",
+            "алгебр",
+            "матем",
+            "физик",
+            "хим",
+            "истор",
+            "конспект",
+            "реферат",
+            "курсов",
+            "study",
+        ]
+    ):
         return "study"
 
     if any(word in text for word in ["купить", "магазин", "продукт", "уборк", "дом", "home"]):
@@ -183,11 +236,28 @@ def _clean_title(raw: str) -> str | None:
     if not text:
         return None
 
+    category_only_answers = {
+        "учеба",
+        "учёба",
+        "study",
+        "быт",
+        "дом",
+        "home",
+        "здоровье",
+        "health",
+        "отдых",
+        "rest",
+        "другое",
+        "other",
+    }
+
+    if text.lower() in category_only_answers:
+        return None
+
     if (
         _extract_duration(text)
         or _normalize_deadline(text)
         or _extract_importance(text)
-        or _extract_category(text)
     ) and len(text.split()) <= 3:
         return None
 
@@ -197,11 +267,14 @@ def _clean_title(raw: str) -> str | None:
         r"\bпослезавтра\b",
         r"\b20\d{2}-\d{2}-\d{2}\b",
         r"\b\d{1,2}[./]\d{1,2}(?:[./]20\d{2})?\b",
+        r"\b\d+\s*(день|дня|дней|д)\b",
         r"\b\d+\s*(час|часа|часов|ч)\b",
-        r"\b\d+\s*(мин|минут|минуты|м)\b",
-        r"\b(high|medium|low)\b",
+        r"\b\d+\s*(мин|минута|минуту|минуты|минут|м)\b",
+        r"\b(high|normal|medium|low)\b",
         r"\bважно\b",
         r"\bсрочно\b",
+        r"\bнормально\b",
+        r"\bобычно\b",
         r"\bсредняя\b",
         r"\bнизкая\b",
         r"\bstudy\b",
@@ -215,6 +288,7 @@ def _clean_title(raw: str) -> str | None:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
     text = re.sub(r"\s+", " ", text).strip(" ,.-")
+    text = re.sub(r"\b(на|к|до)\s*$", "", text, flags=re.IGNORECASE).strip(" ,.-")
 
     return text or None
 

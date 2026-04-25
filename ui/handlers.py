@@ -1,10 +1,20 @@
-﻿import chainlit as cl
+import chainlit as cl
 
 from graph.builder import build_graph
 from llm.client import parse_user_message
-from ui.components import get_main_actions
-from ui.formatters import format_plan_by_day
-from utils.storage import load_tasks
+from ui.components import (
+    get_actions_menu,
+    get_archive_actions,
+    get_cancel_actions,
+    get_main_actions,
+    get_new_task_actions,
+    get_postpone_date_actions,
+    get_task_actions,
+    get_task_list_actions,
+)
+from ui.formatters import format_archive, format_plan_by_day, format_tasks_for_action
+from utils.storage import delete_task, load_tasks, update_task
+from utils.validation import validate_deadline
 
 
 graph = build_graph()
@@ -24,7 +34,59 @@ def get_initial_state() -> dict:
         "is_complete": False,
         "bot_response": None,
         "action": None,
+        "mode": None,
+        "selected_task_id": None,
     }
+
+
+def _first_active_task(tasks: list[dict]) -> dict | None:
+    return next((task for task in tasks if task.get("status") == "active"), None)
+
+
+def _active_tasks() -> list[dict]:
+    return [task for task in load_tasks() if task.get("status") == "active"]
+
+
+def _archived_tasks() -> list[dict]:
+    return [task for task in load_tasks() if task.get("status") in {"completed", "postponed"}]
+
+
+def _reminder_text() -> str:
+    tired_tasks = [
+        task
+        for task in load_tasks()
+        if task.get("postponed_count", 0) >= 5 and task.get("status") != "completed"
+    ]
+    if not tired_tasks:
+        return ""
+
+    lines = ["\n\n⚠️ Напоминание: эти задачи уже откладывались много раз, лучше закрыть их поскорее:"]
+    for task in tired_tasks[:3]:
+        lines.append(f"• {task.get('title', 'Задача')} — переносов: {task.get('postponed_count', 0)}")
+    return "\n".join(lines)
+
+
+def _run_graph_with_state(state: dict, parsed: dict, user_message: str) -> dict:
+    state["user_message"] = user_message
+    state["intent"] = parsed.get("intent", "add_task")
+    state["task_data"] = parsed.get("task_data", {})
+    state["action"] = None
+    state.setdefault("messages", []).append({"role": "user", "content": user_message})
+
+    result = graph.invoke(state)
+    result.setdefault("messages", []).append(
+        {"role": "assistant", "content": result.get("bot_response", "")}
+    )
+    return result
+
+
+async def _send_plan() -> None:
+    tasks = _active_tasks()
+    first_active = _first_active_task(tasks)
+    await cl.Message(
+        content=format_plan_by_day(tasks),
+        actions=get_task_actions(first_active["id"]) if first_active else get_main_actions(),
+    ).send()
 
 
 async def handle_start():
@@ -33,6 +95,7 @@ async def handle_start():
     cl.user_session.set("state", state)
 
     result = graph.invoke(state)
+    result["bot_response"] = (result.get("bot_response") or "") + _reminder_text()
 
     cl.user_session.set("state", result)
 
@@ -45,68 +108,179 @@ async def handle_start():
 async def handle_message(msg: cl.Message):
     state = cl.user_session.get("state") or get_initial_state()
 
+    if state.get("mode") == "awaiting_postpone_deadline":
+        parsed = parse_user_message(msg.content, state)
+        deadline = parsed.get("task_data", {}).get("deadline")
+        errors = validate_deadline(deadline)
+        task_id = state.get("selected_task_id")
+
+        if not deadline or errors:
+            await cl.Message(
+                content="Не понял дату переноса. Напишите, например: `завтра`, `25.04` или выберите кнопку.",
+                actions=get_postpone_date_actions(task_id) if task_id else get_cancel_actions(),
+            ).send()
+            return
+
+        task = next((item for item in load_tasks() if item.get("id") == task_id), {})
+        count = task.get("postponed_count", 0) + 1
+        update_task(task_id, {"deadline": deadline, "status": "postponed", "postponed_count": count})
+        state["mode"] = None
+        state["selected_task_id"] = None
+        cl.user_session.set("state", state)
+
+        warning = "\n\n⚠️ Эта задача уже часто переносилась. Стоит запланировать её первой." if count >= 5 else ""
+        await cl.Message(
+            content=f"📅 Перенёс задачу на {deadline}. Количество переносов: {count}.{warning}",
+            actions=get_main_actions(),
+        ).send()
+        return
+
     parsed = parse_user_message(msg.content, state)
-
-    state["user_message"] = msg.content
-    state["intent"] = parsed.get("intent", "add_task")
-    state["task_data"] = parsed.get("task_data", {})
-    state["action"] = None
-    state.setdefault("messages", []).append({"role": "user", "content": msg.content})
-
-    result = graph.invoke(state)
-
-    result.setdefault("messages", []).append(
-        {
-            "role": "assistant",
-            "content": result.get("bot_response", ""),
-        }
-    )
-
+    result = _run_graph_with_state(state, parsed, msg.content)
     cl.user_session.set("state", result)
 
     if result.get("current_step") == "plan_ready":
-        content = format_plan(result.get("tasks", []))
-    else:
-        content = result.get("bot_response", "")
+        await _send_plan()
+        return
 
+    actions = get_new_task_actions() if result.get("current_step") == "ask_missing_info" else get_main_actions()
     await cl.Message(
-        content=content,
-        actions=get_main_actions(),
+        content=result.get("bot_response", ""),
+        actions=actions,
     ).send()
 
 
-@cl.action_callback("main_cmd")
 async def handle_action(action: cl.Action):
-    """Обработка кнопок главного меню"""
-    state = cl.user_session.get("state")
-    
-    # Извлекаем данные из payload
-    intent = action.payload.get("intent", "unknown")
-    action_type = action.payload.get("action")  # complete_task / postpone_task / show_plan
-    task_id = action.payload.get("task_id")
-    
-    # Обновляем состояние
-    state["intent"] = intent
-    state["action"] = action_type
-    state["messages"].append({"role": "user", "content": f"[КНОПКА: {intent}]"})
-    
-    if task_id:
-        state["task_data"]["id"] = task_id
-    
-    # Запускаем граф
-    res = graph.invoke(state)
-    cl.user_session.set("state", res)
-    
-    # Показываем результат
-    if intent == "show_plan":
-        # ✅ Ключевой момент: используем format_plan_by_day вместо format_plan
-        from ui.formatters import format_plan_by_day
+    state = cl.user_session.get("state") or get_initial_state()
+    payload = action.payload or {}
+    intent = payload.get("intent", "unknown")
+    action_type = payload.get("action")
+    task_id = payload.get("task_id")
+
+    state.setdefault("messages", []).append({"role": "user", "content": f"[КНОПКА: {intent}]"})
+
+    if action_type == "cancel":
+        state["mode"] = None
+        state["selected_task_id"] = None
+        state["draft_task"] = {}
+        state["task_data"] = {}
+        cl.user_session.set("state", state)
+        await cl.Message(content="Ок, отменил текущее действие.", actions=get_main_actions()).send()
+        return
+
+    if action_type == "help":
+        state["intent"] = "help"
+        state["action"] = "help"
+        result = graph.invoke(state)
+        cl.user_session.set("state", result)
+        await cl.Message(content=result.get("bot_response", ""), actions=get_main_actions()).send()
+        return
+
+    if action_type == "new_task":
+        state["mode"] = "new_task"
+        state["draft_task"] = {}
+        state["task_data"] = {}
+        cl.user_session.set("state", state)
         await cl.Message(
-            content=format_plan_by_day(res.get("tasks", [])),
-            actions=get_main_actions()
+            content="Опишите новую задачу обычным текстом. Например: `решение задач по математике на 31 минуту до завтра`.",
+            actions=get_new_task_actions(),
         ).send()
-    else:
+        return
+
+    if action_type in {"hint_category", "hint_importance", "hint_deadline"}:
+        task_data = {
+            key: payload[key]
+            for key in ("category", "importance", "deadline")
+            if key in payload
+        }
+        parsed = {"intent": "add_task", "task_data": task_data}
+        result = _run_graph_with_state(state, parsed, f"[подсказка: {action_type}]")
+        cl.user_session.set("state", result)
+        await cl.Message(content=result.get("bot_response", ""), actions=get_new_task_actions()).send()
+        return
+
+    if action_type == "show_plan":
+        await _send_plan()
+        return
+
+    if action_type == "actions_menu":
+        await cl.Message(content="Что сделать с задачами?", actions=get_actions_menu()).send()
+        return
+
+    if action_type == "complete_menu":
+        tasks = _active_tasks()
         await cl.Message(
-            content=res.get("bot_response", "✅"),
-            actions=get_main_actions()
+            content=format_tasks_for_action(tasks, "Выберите задачу для выполнения"),
+            actions=get_task_list_actions(tasks, "complete_task") if tasks else get_main_actions(),
         ).send()
+        return
+
+    if action_type == "delete_menu":
+        tasks = load_tasks()
+        await cl.Message(
+            content=format_tasks_for_action(tasks, "Выберите задачу для удаления"),
+            actions=get_task_list_actions(tasks, "delete_task") if tasks else get_main_actions(),
+        ).send()
+        return
+
+    if action_type == "postpone_menu":
+        tasks = _active_tasks()
+        await cl.Message(
+            content=format_tasks_for_action(tasks, "Выберите задачу для переноса"),
+            actions=get_task_list_actions(tasks, "postpone_prepare") if tasks else get_main_actions(),
+        ).send()
+        return
+
+    if action_type == "archive":
+        tasks = _archived_tasks()
+        await cl.Message(
+            content=format_archive(load_tasks()),
+            actions=get_archive_actions(tasks) if tasks else get_main_actions(),
+        ).send()
+        return
+
+    if action_type == "complete_task" and task_id:
+        update_task(task_id, {"status": "completed"})
+        await cl.Message(content="✅ Задача отмечена выполненной.", actions=get_main_actions()).send()
+        return
+
+    if action_type == "restore_task" and task_id:
+        update_task(task_id, {"status": "active"})
+        await cl.Message(content="↩️ Вернул задачу в активный план.", actions=get_main_actions()).send()
+        return
+
+    if action_type == "delete_task" and task_id:
+        deleted = delete_task(task_id)
+        text = "🗑 Задача удалена." if deleted else "Не нашёл задачу для удаления."
+        await cl.Message(content=text, actions=get_main_actions()).send()
+        return
+
+    if action_type == "postpone_prepare" and task_id:
+        state["mode"] = "awaiting_postpone_deadline"
+        state["selected_task_id"] = task_id
+        cl.user_session.set("state", state)
+        await cl.Message(
+            content="На какую дату перенести задачу? Можно выбрать вариант или написать дату текстом.",
+            actions=get_postpone_date_actions(task_id),
+        ).send()
+        return
+
+    if action_type == "postpone_task" and task_id:
+        task = next((item for item in load_tasks() if item.get("id") == task_id), {})
+        count = task.get("postponed_count", 0) + 1
+        deadline = payload.get("deadline")
+        updates = {"status": "postponed", "postponed_count": count}
+        if deadline:
+            updates["deadline"] = deadline
+        update_task(task_id, updates)
+        state["mode"] = None
+        state["selected_task_id"] = None
+        cl.user_session.set("state", state)
+        warning = "\n\n⚠️ Эта задача уже часто переносилась. Стоит выполнить её поскорее." if count >= 5 else ""
+        await cl.Message(
+            content=f"📅 Задача перенесена. Количество переносов: {count}.{warning}",
+            actions=get_main_actions(),
+        ).send()
+        return
+
+    await cl.Message(content="Не понял действие. Вернул главное меню.", actions=get_main_actions()).send()

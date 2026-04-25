@@ -1,44 +1,48 @@
-# Архитектура проекта
+# Архитектура
 
-## Разделение зон
+Проект разделён на слои:
 
-Настя:
-- graph/
-- utils/validation.py
-- utils/storage.py
+- `app.py` — входная точка Chainlit.
+- `ui/` — обработчики сообщений, кнопки и форматирование ответов.
+- `graph/` — LangGraph-сценарий диалога.
+- `llm/` — промпт и извлечение структуры задачи из текста.
+- `core/` — сортировка и планирование задач.
+- `utils/` — валидация и JSON-хранилище.
+- `data/` — runtime-данные и шаблоны.
+- `tests/` — быстрые проверки логики.
 
-Ярослав:
-- app.py
-- ui/
-- llm/
-- core/
+## State
 
-## Контракт между UI и Graph
+Граф принимает и возвращает `AgentState`:
 
-UI передаёт в граф state.
+- `messages`
+- `user_message`
+- `intent`
+- `current_step`
+- `task_data`
+- `draft_task`
+- `tasks`
+- `missing_fields`
+- `errors`
+- `is_complete`
+- `bot_response`
+- `action`
 
-Минимальные поля state:
+## Диалоговый граф
 
-- messages
-- user_message
-- current_step
-- task_data
-- tasks
-- errors
-- is_complete
-- bot_response
-- action
+Сценарий построен через `StateGraph`:
 
-Graph возвращает обновлённый state.
+`START -> route_intent -> greet | collect_task | build_plan | handle_action`
 
-Главное поле для UI:
+Для добавления задачи:
 
-- bot_response
+`collect_task -> validate_task -> ask_missing_info | save_task -> complete -> END`
 
-UI показывает пользователю значение bot_response.
+Граф не содержит обратных рёбер, поэтому один вызов не зацикливается. Продолжение
+диалога происходит через сохранённый `draft_task` в Chainlit-сессии.
 
-## Правило
+## Контракт UI и Graph
 
-graph/ не импортирует ui/.
-ui/ не лезет внутрь узлов graph/.
-Связь только через state.
+UI передаёт сообщение пользователя в state, запускает граф и показывает
+`bot_response` или отформатированный план. Graph не импортирует `ui/`; связь
+идёт только через state.

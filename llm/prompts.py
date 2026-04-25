@@ -23,7 +23,7 @@
 - title: название задачи
 - deadline: дата в формате YYYY-MM-DD
 - duration_minutes: длительность в минутах
-- importance: low / medium / high
+- importance: low / normal / medium / high
 - category: study / home / health / rest / other
 
 Правила:
@@ -32,6 +32,7 @@
 - Если пользователь отвечает "2 часа", и раньше не хватало duration_minutes, верни duration_minutes = 120.
 - Если пользователь отвечает "завтра", и раньше не хватало deadline, верни deadline.
 - Если пользователь отвечает "важно" или "срочно", верни importance = high.
+- Если задача обычная или пользователь пишет "normal", "нормально", "обычно", верни importance = normal.
 - Если пользователь отвечает "учёба", "лаба", "дз", верни category = study.
 - Не придумывай поля, если их нельзя понять.
 

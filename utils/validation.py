@@ -105,4 +105,4 @@ def validate_task(task: Optional[TaskData]) -> list[str]:
     errors.extend(validate_importance(task.get("importance")))
     errors.extend(validate_category(task.get("category")))
 
-    return errors
+    return errors 
